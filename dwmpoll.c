@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
@@ -40,15 +41,24 @@ static int read_file(const char* fname, char* buff, int n) {
 
 int epoll, minute_timer, inot;
 
-char status_text[256];
-char battery_text[8], time_text[64];
+char status_text[256],
+  bat_capacity_text[8],
+  bat_status_text[8],
+  brightness_text[16],
+  time_text[64];
 
 static Display *dpy;
 static int screen;
 static Window root;
 
 void setroot(void) {
-  sprintf(status_text,"%s | %s",battery_text,time_text);
+  sprintf(status_text,
+    " %s | %s%s │ %s "
+    , brightness_text
+    , bat_status_text
+    , bat_capacity_text
+    , time_text
+  );
   printf("%s\n",status_text);
   XStoreName(dpy,root,status_text);
   XFlush(dpy);
@@ -81,22 +91,53 @@ struct file_list_entry {
   handler h;
 };
 
-const char* const bat_icons[]
-  = { "","","","","","","","","","" };
-void fmt_battery(struct file_list_entry* f) {
+const char* const bat_icons[] = { "","","","","","","","","","" };
+void fmt_bat_capacity(struct file_list_entry* f) {
   char buf[8];
   if (!read_file(f->name,buf,sizeof(buf)-1)) {
-    const int bat = atoi(buf);
-    snprintf(battery_text,sizeof(battery_text),
-      "%s%3d%%",bat_icons[bat/10],bat);
+    const int val = atoi(buf);
+    snprintf(bat_capacity_text,sizeof(bat_capacity_text),
+      "%s%3d%%",bat_icons[val/10],val);
   } else {
-    snprintf(battery_text,sizeof(battery_text), " ??%%");
+    snprintf(bat_capacity_text,sizeof(bat_capacity_text), " ??%%");
+  }
+}
+void fmt_bat_status(struct file_list_entry* f) {
+  char buf[32];
+  if (!read_file(f->name,buf,sizeof(buf)-1)) {
+    for (int i=strlen(buf); i--; ) {
+      char c = buf[i];
+      if (isprint(c))
+        buf[i] = tolower(c);
+      else
+        buf[i] = '\0';
+    }
+    if (!strcmp(buf,"charging"))
+      snprintf(bat_status_text,sizeof(bat_status_text), "↑");
+    else if (!strcmp(buf,"discharging"))
+      snprintf(bat_status_text,sizeof(bat_status_text), "↓");
+    else
+      snprintf(bat_status_text,sizeof(bat_status_text), " ");
+  } else {
+    snprintf(bat_status_text,sizeof(bat_status_text), "?");
+  }
+}
+
+void fmt_brightness(struct file_list_entry* f) {
+  char buf[8];
+  if (!read_file(f->name,buf,sizeof(buf)-1)) {
+    const int val = atoi(buf);
+    snprintf(brightness_text,sizeof(brightness_text), "盛 %5d",val);
+  } else {
+    snprintf(brightness_text,sizeof(brightness_text), "盛 ?????");
   }
 }
 
 static struct file_list_entry files[] = {
   /* { 0, "/home/ivanp/test", battery } */
-  { 0, "/sys/class/power_supply/BAT0/capacity", fmt_battery }
+  { 0, "/sys/class/power_supply/BAT0/capacity", fmt_bat_capacity },
+  { 0, "/sys/class/power_supply/BAT0/status", fmt_bat_status },
+  { 0, "/sys/class/backlight/intel_backlight/brightness", fmt_brightness }
 };
 
 void epoll_loop() {
@@ -139,7 +180,13 @@ static int epoll_add(int epoll, int fd) {
   return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
 }
 
+void cleanup(void) {
+  if (dpy) XCloseDisplay(dpy);
+}
+
 int main() {
+  atexit(cleanup);
+
   // setup X --------------------------------------------------------
   if (!(dpy = XOpenDisplay(NULL))) {
     ERR("XOpenDisplay");
@@ -207,7 +254,4 @@ int main() {
 
   // loop -----------------------------------------------------------
   epoll_loop(epoll);
-
-  // clean up -------------------------------------------------------
-  XCloseDisplay(dpy);
 }
