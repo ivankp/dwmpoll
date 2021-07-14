@@ -53,7 +53,7 @@ static Window root;
 
 void setroot(void) {
   sprintf(status_text,
-    " %s | %s%s │ %s "
+    " %s │ %s%s │ %s "
     , brightness_text
     , bat_status_text
     , bat_capacity_text
@@ -174,7 +174,8 @@ void epoll_loop() {
 
 static int epoll_add(int epoll, int fd) {
   struct epoll_event event = {
-    .events = EPOLLIN | EPOLLET,
+    .events = EPOLLIN,
+    /* .events = EPOLLIN | EPOLLET, */
     .data = { .fd = fd }
   };
   return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
