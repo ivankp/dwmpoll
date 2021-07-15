@@ -66,9 +66,12 @@ char status_text[256],
   cpu_temp_text[16],
   mem_text[16],
   brightness_text[16],
-  bat_status_text[8],
-  bat_capacity_text[8],
+  bat_status_text[16],
+  bat_capacity_text[16],
   time_text[64];
+
+// TODO: layout, volume, packages, internet
+// TODO: acpi
 
 void setroot(void) {
   sprintf(status_text,
@@ -170,29 +173,31 @@ struct file_list_entry {
 };
 
 const char* const bat_icons[] = { "","","","","","","","","","" };
-void fmt_bat_capacity(struct file_list_entry* f) {
-  char buf[8];
-  if (!read_file(f->name,buf,sizeof(buf)-1)) {
-    const int val = atoi(buf);
+void fmt_bat_capacity(void) {
+  if (!read_file("/sys/class/power_supply/BAT0/capacity",
+    bat_capacity_text,sizeof(bat_capacity_text)-1
+  )) {
+    const int val = atoi(bat_capacity_text);
     snprintf(bat_capacity_text,sizeof(bat_capacity_text),
       "%s%3d%%",bat_icons[val/10],val);
   } else {
     snprintf(bat_capacity_text,sizeof(bat_capacity_text), " ??%%");
   }
 }
-void fmt_bat_status(struct file_list_entry* f) {
-  char buf[32];
-  if (!read_file(f->name,buf,sizeof(buf)-1)) {
-    for (int i=strlen(buf); i--; ) {
-      char c = buf[i];
+void fmt_bat_status(void) {
+  if (!read_file("/sys/class/power_supply/BAT0/status",
+    bat_status_text,sizeof(bat_status_text)-1
+  )) {
+    for (int i=strlen(bat_status_text); i--; ) {
+      char c = bat_status_text[i];
       if (isprint(c))
-        buf[i] = tolower(c);
+        bat_status_text[i] = tolower(c);
       else
-        buf[i] = '\0';
+        bat_status_text[i] = '\0';
     }
-    if (!strcmp(buf,"charging"))
+    if (!strcmp(bat_status_text,"charging"))
       snprintf(bat_status_text,sizeof(bat_status_text), "↑");
-    else if (!strcmp(buf,"discharging"))
+    else if (!strcmp(bat_status_text,"discharging"))
       snprintf(bat_status_text,sizeof(bat_status_text), "↓");
     else
       snprintf(bat_status_text,sizeof(bat_status_text), " ");
@@ -202,9 +207,8 @@ void fmt_bat_status(struct file_list_entry* f) {
 }
 
 void fmt_brightness(struct file_list_entry* f) {
-  char buf[8];
-  if (!read_file(f->name,buf,sizeof(buf)-1)) {
-    const int val = atoi(buf);
+  if (!read_file(f->name, brightness_text,sizeof(brightness_text)-1)) {
+    const int val = atoi(brightness_text);
     snprintf(brightness_text,sizeof(brightness_text), "盛 %5d",val);
   } else {
     snprintf(brightness_text,sizeof(brightness_text), "盛 ?????");
@@ -212,8 +216,6 @@ void fmt_brightness(struct file_list_entry* f) {
 }
 
 static struct file_list_entry files[] = {
-  { 0, "/sys/class/power_supply/BAT0/capacity", fmt_bat_capacity },
-  { 0, "/sys/class/power_supply/BAT0/status", fmt_bat_status },
   { 0, "/sys/class/backlight/intel_backlight/brightness", fmt_brightness }
 };
 
@@ -228,6 +230,8 @@ void epoll_loop() {
       fmt_cpu_load();
       fmt_cpu_temp();
       fmt_mem();
+      fmt_bat_status();
+      fmt_bat_capacity();
       setroot();
     } else while (n--) {
       /* uint32_t flags = e.events; */
@@ -286,6 +290,8 @@ int main() {
   fmt_cpu_load();
   fmt_cpu_temp();
   fmt_mem();
+  fmt_bat_status();
+  fmt_bat_capacity();
   fmt_time();
   setroot();
 
