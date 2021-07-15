@@ -65,7 +65,10 @@ static Window root;
 
 int epoll, timer_1min, inot;
 
+pthread_mutex_t mutex;
+
 char status_text[256],
+  kbd_layout_text[16],
   cpu_load_text[16],
   cpu_temp_text[16],
   mem_text[16],
@@ -79,7 +82,8 @@ char status_text[256],
 
 void setroot(void) {
   sprintf(status_text,
-    " %s %s │ %s │ %s │ %s%s │ %s "
+    " %s │ %s %s │ %s │ %s │ %s%s │ %s "
+    , kbd_layout_text
     , cpu_load_text
     , cpu_temp_text
     , mem_text
@@ -219,59 +223,6 @@ void fmt_brightness(struct file_list_entry* f) {
   }
 }
 
-static struct file_list_entry files[] = {
-  { 0, "/sys/class/backlight/intel_backlight/brightness", fmt_brightness }
-};
-
-void epoll_loop() {
-  struct epoll_event e;
-  char inotify_buffer[sizeof(struct inotify_event)+64];
-  for (;;) {
-    int n = epoll_wait(epoll, &e, 1, 2000/*ms*/);
-    if (n < 0) {
-      ERR("epoll_wait");
-    } else if (n==0) {
-      fmt_bat_status();
-      fmt_bat_capacity();
-      fmt_mem();
-      fmt_cpu_load();
-      fmt_cpu_temp();
-      setroot();
-    } else while (n--) {
-      /* uint32_t flags = e.events; */
-      const int fd = e.data.fd;
-
-      if (fd == timer_1min) {
-        long int timersElapsed = 0;
-        (void)read(fd, &timersElapsed, sizeof(timersElapsed));
-        fmt_time();
-        setroot();
-
-      } else if (fd == inot) {
-        read(fd, inotify_buffer, sizeof(inotify_buffer));
-        struct inotify_event* ie = (struct inotify_event*)inotify_buffer;
-        const int wd = ie->wd;
-        for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
-          if (f->wd == wd) {
-            f->h(f);
-            setroot();
-            break;
-          }
-        }
-      }
-    } // while n
-  } // ;;
-}
-
-static int epoll_add(int epoll, int fd) {
-  struct epoll_event event = {
-    .events = EPOLLIN,
-    /* .events = EPOLLIN | EPOLLET, */
-    .data = { .fd = fd }
-  };
-  return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
-}
-
 int get_kbd_layout(void) {
   XkbStateRec state;
   XkbGetState(dpy, XkbUseCoreKbd, &state);
@@ -286,10 +237,13 @@ void fmt_kbd_layout(int group) {
   for (int i=0; i<group; ++i) {
     tok = strtok(NULL,",");
     if (!tok) {
+      snprintf(kbd_layout_text,sizeof(kbd_layout_text), "??");
       return;
     }
   }
-  printf("%s\n",tok);
+  snprintf(kbd_layout_text,sizeof(kbd_layout_text), tok);
+  for (char* c=kbd_layout_text; *c; ++c)
+    *c = toupper(*c);
 }
 
 void* xevent_loop(void*) {
@@ -305,11 +259,74 @@ void* xevent_loop(void*) {
     if (e.type == xkbEventType) {
       XkbEvent* xkbe = (XkbEvent*) &e;
       if (xkbe->any.xkb_type == XkbStateNotify) {
+        pthread_mutex_lock(&mutex);
         fmt_kbd_layout(xkbe->state.group);
+        setroot();
+        pthread_mutex_unlock(&mutex);
       }
     }
   }
   return NULL;
+}
+
+static struct file_list_entry files[] = {
+  { 0, "/sys/class/backlight/intel_backlight/brightness", fmt_brightness }
+};
+
+void epoll_loop() {
+  struct epoll_event e;
+  char inotify_buffer[sizeof(struct inotify_event)+64];
+  for (;;) {
+    int n = epoll_wait(epoll, &e, 1, 2000/*ms*/);
+    if (n < 0) {
+      ERR("epoll_wait");
+    } else if (n==0) {
+      pthread_mutex_lock(&mutex);
+      fmt_bat_status();
+      fmt_bat_capacity();
+      fmt_mem();
+      fmt_cpu_load();
+      fmt_cpu_temp();
+      setroot();
+      pthread_mutex_unlock(&mutex);
+    } else while (n--) {
+      /* uint32_t flags = e.events; */
+      const int fd = e.data.fd;
+
+      if (fd == timer_1min) {
+        long int timersElapsed = 0;
+        (void)read(fd, &timersElapsed, sizeof(timersElapsed));
+
+        pthread_mutex_lock(&mutex);
+        fmt_time();
+        setroot();
+        pthread_mutex_unlock(&mutex);
+
+      } else if (fd == inot) {
+        read(fd, inotify_buffer, sizeof(inotify_buffer));
+        struct inotify_event* ie = (struct inotify_event*)inotify_buffer;
+        const int wd = ie->wd;
+        for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
+          if (f->wd == wd) {
+            pthread_mutex_lock(&mutex);
+            f->h(f);
+            setroot();
+            pthread_mutex_unlock(&mutex);
+            break;
+          }
+        }
+      }
+    } // while n
+  } // ;;
+}
+
+static int epoll_add(int epoll, int fd) {
+  struct epoll_event event = {
+    .events = EPOLLIN,
+    /* .events = EPOLLIN | EPOLLET, */
+    .data = { .fd = fd }
+  };
+  return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
 }
 
 void cleanup(void) {
