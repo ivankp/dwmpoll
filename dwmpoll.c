@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
@@ -110,35 +111,22 @@ void fmt_cpu(void) {
 }
 
 void fmt_mem(void) {
-  static char buf[128];
-  FILE* pipe = popen("free","r");
-  if (!pipe) {
-    ERR("popen");
+  uintmax_t total, free, buffers, cached;
+  if (pscanf("/proc/meminfo",
+    "MemTotal: %ju kB\n"
+    "MemFree: %ju kB\n"
+    "MemAvailable: %ju kB\n"
+    "Buffers: %ju kB\n"
+    "Cached: %ju kB\n",
+    &total, &free, &buffers, &buffers, &cached) != 5
+  ) {
     return;
   }
-  while (fgets(buf,sizeof(buf),pipe)) {
-    if (!strncmp(buf,"Mem:",4)) {
-      double total=-1, available=-1;
-      const char* token = strtok(buf," ");
-      for (int i=0;;++i) {
-        if (!(token = strtok(NULL," "))) break;
-        if (i==0) {
-          total = atoi(token);
-        } else if (i==5) {
-          available = atoi(token);
-          break;
-        }
-      }
-      if (available>=0) {
-        snprintf(mem_text,sizeof(mem_text), "MEM%3.0f%%",
-          100.*(1.-available/total));
-      } else {
-        snprintf(mem_text,sizeof(mem_text), "MEM ???");
-      }
-      break;
-    }
+  if (total == 0) {
+    return;
   }
-  pclose(pipe);
+  snprintf(mem_text,sizeof(mem_text), "MEM%3ld%%",
+    100*((total-free)-(buffers+cached))/total);
 }
 
 struct itimerspec itspec;
