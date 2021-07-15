@@ -65,7 +65,7 @@ static Window root;
 
 int epoll, timer_1min, inot;
 
-pthread_mutex_t mutex;
+pthread_mutex_t setroot_mutex;
 
 char status_text[256],
   kbd_layout_text[16],
@@ -77,7 +77,7 @@ char status_text[256],
   bat_capacity_text[16],
   time_text[64];
 
-// TODO: layout, volume, packages, internet
+// TODO: volume, packages, internet
 // TODO: acpi
 
 void setroot(void) {
@@ -259,10 +259,10 @@ void* xevent_loop(void*) {
     if (e.type == xkbEventType) {
       XkbEvent* xkbe = (XkbEvent*) &e;
       if (xkbe->any.xkb_type == XkbStateNotify) {
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&setroot_mutex);
         fmt_kbd_layout(xkbe->state.group);
         setroot();
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&setroot_mutex);
       }
     }
   }
@@ -281,14 +281,14 @@ void epoll_loop() {
     if (n < 0) {
       ERR("epoll_wait");
     } else if (n==0) {
-      pthread_mutex_lock(&mutex);
+      pthread_mutex_lock(&setroot_mutex);
       fmt_bat_status();
       fmt_bat_capacity();
       fmt_mem();
       fmt_cpu_load();
       fmt_cpu_temp();
       setroot();
-      pthread_mutex_unlock(&mutex);
+      pthread_mutex_unlock(&setroot_mutex);
     } else while (n--) {
       /* uint32_t flags = e.events; */
       const int fd = e.data.fd;
@@ -297,10 +297,10 @@ void epoll_loop() {
         long int timersElapsed = 0;
         (void)read(fd, &timersElapsed, sizeof(timersElapsed));
 
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&setroot_mutex);
         fmt_time();
         setroot();
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&setroot_mutex);
 
       } else if (fd == inot) {
         read(fd, inotify_buffer, sizeof(inotify_buffer));
@@ -308,10 +308,10 @@ void epoll_loop() {
         const int wd = ie->wd;
         for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
           if (f->wd == wd) {
-            pthread_mutex_lock(&mutex);
+            pthread_mutex_lock(&setroot_mutex);
             f->h(f);
             setroot();
-            pthread_mutex_unlock(&mutex);
+            pthread_mutex_unlock(&setroot_mutex);
             break;
           }
         }
@@ -343,7 +343,7 @@ int main() {
   }
   screen = DefaultScreen(dpy);
   root = RootWindow(dpy, screen);
-  XKeysymToKeycode(dpy, XK_F1);
+  XKeysymToKeycode(dpy, XK_F1); // make sure keyboard layout is loaded
 
   // set initial status ---------------------------------------------
   for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
