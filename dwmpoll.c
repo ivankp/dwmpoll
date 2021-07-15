@@ -113,13 +113,14 @@ failed:
 }
 
 void fmt_cpu_temp(void) {
+#ifdef THERMAL_ZONE
   char buf[8];
-  if (!read_file("/sys/class/thermal/thermal_zone8/temp",buf,sizeof(buf)-1)) {
+  if (!read_file(STR(THERMAL_ZONE),buf,sizeof(buf)-1)) {
     const double val = atoi(buf);
     snprintf(cpu_temp_text,sizeof(cpu_temp_text), "%2.0f°C",val/1e3);
-  } else {
+  } else
+#endif
     snprintf(cpu_temp_text,sizeof(cpu_temp_text), "?°C");
-  }
 }
 
 void fmt_mem(void) {
