@@ -8,12 +8,16 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <sys/types.h>
-/* #include <sys/stat.h> */
 #include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <sys/timerfd.h>
+
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/XKBlib.h>
+#include <X11/extensions/XKBrules.h>
 
 #define STR1(x) #x
 #define STR(x) STR1(x)
@@ -227,11 +231,11 @@ void epoll_loop() {
     if (n < 0) {
       ERR("epoll_wait");
     } else if (n==0) {
-      fmt_cpu_load();
-      fmt_cpu_temp();
-      fmt_mem();
       fmt_bat_status();
       fmt_bat_capacity();
+      fmt_mem();
+      fmt_cpu_load();
+      fmt_cpu_temp();
       setroot();
     } else while (n--) {
       /* uint32_t flags = e.events; */
@@ -268,6 +272,46 @@ static int epoll_add(int epoll, int fd) {
   return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
 }
 
+int get_kbd_layout(void) {
+  XkbStateRec state;
+  XkbGetState(dpy, XkbUseCoreKbd, &state);
+  return state.group;
+}
+
+void fmt_kbd_layout(int group) {
+  static XkbRF_VarDefsRec vd;
+  XkbRF_GetNamesProp(dpy, NULL, &vd);
+
+  char* tok = strtok(vd.layout,",");
+  for (int i=0; i<group; ++i) {
+    tok = strtok(NULL,",");
+    if (!tok) {
+      return;
+    }
+  }
+  printf("%s\n",tok);
+}
+
+void* xevent_loop(void*) {
+  int xkbEventType;
+  XkbQueryExtension(dpy, 0, &xkbEventType, 0, 0, 0);
+  XkbSelectEventDetails(dpy,
+    XkbUseCoreKbd, XkbStateNotify, XkbAllStateComponentsMask,
+    XkbGroupStateMask);
+  XSync(dpy, False);
+
+  for (XEvent e;;) {
+    XNextEvent(dpy, &e);
+    if (e.type == xkbEventType) {
+      XkbEvent* xkbe = (XkbEvent*) &e;
+      if (xkbe->any.xkb_type == XkbStateNotify) {
+        fmt_kbd_layout(xkbe->state.group);
+      }
+    }
+  }
+  return NULL;
+}
+
 void cleanup(void) {
   if (dpy) XCloseDisplay(dpy);
 }
@@ -282,16 +326,18 @@ int main() {
   }
   screen = DefaultScreen(dpy);
   root = RootWindow(dpy, screen);
+  XKeysymToKeycode(dpy, XK_F1);
 
   // set initial status ---------------------------------------------
   for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
     f->h(f);
   }
-  fmt_cpu_load();
-  fmt_cpu_temp();
-  fmt_mem();
+  fmt_kbd_layout(get_kbd_layout());
   fmt_bat_status();
   fmt_bat_capacity();
+  fmt_mem();
+  fmt_cpu_load();
+  fmt_cpu_temp();
   fmt_time();
   setroot();
 
@@ -345,6 +391,9 @@ int main() {
     return 1;
   }
 
-  // loop -----------------------------------------------------------
+  // loops ----------------------------------------------------------
+  pthread_t xevent_thread;
+  pthread_create(&xevent_thread, NULL, xevent_loop, NULL);
+
   epoll_loop(epoll);
 }
