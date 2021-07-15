@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
@@ -39,6 +40,20 @@ static int read_file(const char* fname, char* buf, int n) {
   return 0;
 }
 
+int pscanf(const char *path, const char *fmt, ...) {
+  va_list ap;
+  FILE *fp = fopen(path,"r");
+  if (!fp) {
+    ERR("fopen");
+    return -1;
+  }
+  va_start(ap, fmt);
+  int n = vfscanf(fp, fmt, ap);
+  va_end(ap);
+  fclose(fp);
+  return (n == EOF) ? -1 : n;
+}
+
 static Display *dpy;
 static int screen;
 static Window root;
@@ -68,41 +83,30 @@ void setroot(void) {
   XFlush(dpy);
 }
 
-/* int cpu_sum = 0, cpu_idle, cpu_sum_prev = 0, cpu_idle_prev = 0; */
 void fmt_cpu(void) {
-  /*
-  const int fd = open("/proc/stat", O_RDONLY);
-  if (fd == -1) {
-    ERR("open");
+  static long double a[7];
+  long double b[7], sum;
+  memcpy(b,a,sizeof(b));
+  /* cpu user nice system idle iowait irq softirq */
+  if (pscanf("/proc/stat", "%*s %Lf %Lf %Lf %Lf %Lf %Lf %Lf",
+    &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6]) != 7
+  ) {
     return;
   }
-  char buf[128];
-  ssize_t nread = read(fd,buf,sizeof(buf));
-  if (nread < 0) {
-    ERR("read");
+  if (b[0] == 0) {
     return;
   }
-  buf[nread] = '\0';
-  close(fd);
 
-  cpu_sum = 0;
-  int i = 0;
-  char* token = strtok(buf," ");
-  while (token) {
-    token = strtok(NULL," ");
-    if (token) {
-      cpu_sum += atoi(token);
-      if (i==3)
-        cpu_idle = atoi(token);
-      ++i;
-    }
-  }
-  snprintf(cpu_text,sizeof(cpu_text), "CPU%3.0f%%",
-    100-(cpu_idle-cpu_idle_prev)*100./(cpu_sum-cpu_sum_prev));
-  cpu_idle_prev = cpu_idle;
-  cpu_sum_prev = cpu_sum;
-  */
-  snprintf(cpu_text,sizeof(cpu_text), "CPU ???");
+  sum = (b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6]) -
+    (a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6]);
+
+  if (sum == 0) return;
+
+  snprintf(cpu_text,sizeof(cpu_text), "CPU%3d%%",
+    (int)(100 *
+      ((b[0] + b[1] + b[2] + b[5] + b[6]) -
+       (a[0] + a[1] + a[2] + a[5] + a[6])) / sum)
+  );
 }
 
 void fmt_mem(void) {
@@ -223,7 +227,6 @@ void epoll_loop() {
       fmt_cpu();
       fmt_mem();
       setroot();
-
     } else while (n--) {
       /* uint32_t flags = e.events; */
       const int fd = e.data.fd;
