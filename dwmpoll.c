@@ -62,7 +62,8 @@ static Window root;
 int epoll, timer_1min, inot;
 
 char status_text[256],
-  cpu_text[16],
+  cpu_load_text[16],
+  cpu_temp_text[16],
   mem_text[16],
   brightness_text[16],
   bat_status_text[8],
@@ -71,8 +72,9 @@ char status_text[256],
 
 void setroot(void) {
   sprintf(status_text,
-    " %s │ %s │ %s │ %s%s │ %s "
-    , cpu_text
+    " %s %s │ %s │ %s │ %s%s │ %s "
+    , cpu_load_text
+    , cpu_temp_text
     , mem_text
     , brightness_text
     , bat_status_text
@@ -84,30 +86,40 @@ void setroot(void) {
   XFlush(dpy);
 }
 
-void fmt_cpu(void) {
+void fmt_cpu_load(void) {
   static long double a[7];
   long double b[7], sum;
   memcpy(b,a,sizeof(b));
   /* cpu user nice system idle iowait irq softirq */
   if (pscanf("/proc/stat", "%*s %Lf %Lf %Lf %Lf %Lf %Lf %Lf",
     &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6]) != 7
-  ) {
-    return;
-  }
-  if (b[0] == 0) {
-    return;
-  }
+  ) goto failed;
+
+  if (b[0] == 0) goto failed;
 
   sum = (b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6]) -
     (a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6]);
 
-  if (sum == 0) return;
+  if (sum == 0) goto failed;
 
-  snprintf(cpu_text,sizeof(cpu_text), "CPU%3d%%",
+  snprintf(cpu_load_text,sizeof(cpu_load_text), "CPU%3d%%",
     (int)(100 *
       ((b[0] + b[1] + b[2] + b[5] + b[6]) -
        (a[0] + a[1] + a[2] + a[5] + a[6])) / sum)
   );
+  return;
+failed:
+  snprintf(cpu_load_text,sizeof(cpu_load_text), "CPU ???");
+}
+
+void fmt_cpu_temp(void) {
+  char buf[8];
+  if (!read_file("/sys/class/thermal/thermal_zone8/temp",buf,sizeof(buf)-1)) {
+    const double val = atoi(buf);
+    snprintf(cpu_temp_text,sizeof(cpu_temp_text), "%2.0f°C",val/1e3);
+  } else {
+    snprintf(cpu_temp_text,sizeof(cpu_temp_text), "?°C");
+  }
 }
 
 void fmt_mem(void) {
@@ -212,7 +224,8 @@ void epoll_loop() {
     if (n < 0) {
       ERR("epoll_wait");
     } else if (n==0) {
-      fmt_cpu();
+      fmt_cpu_load();
+      fmt_cpu_temp();
       fmt_mem();
       setroot();
     } else while (n--) {
@@ -269,7 +282,8 @@ int main() {
   for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
     f->h(f);
   }
-  fmt_cpu();
+  fmt_cpu_load();
+  fmt_cpu_temp();
   fmt_mem();
   fmt_time();
   setroot();
