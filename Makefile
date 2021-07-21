@@ -8,7 +8,7 @@ THERMAL_ZONE = $(shell $(THERMAL_ZONE_GREP))
 all: $(MAIN)
 
 $(MAIN): %: %.c
-	gcc -Wall -O3 -pthread -DTHERMAL_ZONE='$(THERMAL_ZONE)' $< -o $@ -lX11 -lxkbfile
+	gcc -Wall -g -pthread -DTHERMAL_ZONE='$(THERMAL_ZONE)' $< -o $@ -lX11 -lxkbfile -lasound
 
 clean:
 	@rm -fv $(MAIN)

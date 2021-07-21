@@ -6,9 +6,11 @@
 #include <ctype.h>
 #include <errno.h>
 #include <time.h>
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
+
 #include <sys/types.h>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
@@ -18,6 +20,8 @@
 #include <X11/Xutil.h>
 #include <X11/XKBlib.h>
 #include <X11/extensions/XKBrules.h>
+
+#include <alsa/asoundlib.h>
 
 #define STR1(x) #x
 #define STR(x) STR1(x)
@@ -63,7 +67,8 @@ static Display *dpy;
 static int screen;
 static Window root;
 
-int epoll, timer_1min, inot;
+int epoll, timer_1min, inot, snd;
+snd_ctl_t* snd_ctl;
 
 pthread_mutex_t setroot_mutex;
 
@@ -72,6 +77,7 @@ char status_text[256],
   cpu_load_text[16],
   cpu_temp_text[16],
   mem_text[16],
+  snd_text[16],
   brightness_text[16],
   bat_status_text[16],
   bat_capacity_text[16],
@@ -82,17 +88,18 @@ char status_text[256],
 
 void setroot(void) {
   sprintf(status_text,
-    " %s │ %s %s │ %s │ %s │ %s%s │ %s "
+    " %s │ %s %s │ %s │ %s │ %s │ %s%s │ %s "
     , kbd_layout_text
     , cpu_load_text
     , cpu_temp_text
     , mem_text
+    , snd_text
     , brightness_text
     , bat_status_text
     , bat_capacity_text
     , time_text
   );
-  printf("%s\n",status_text);
+  /* printf("%s\n",status_text); */
   XStoreName(dpy,root,status_text);
   XFlush(dpy);
 }
@@ -269,6 +276,76 @@ void* xevent_loop(void*) {
   return NULL;
 }
 
+static void fmt_snd(void) {
+  FILE* p = popen(
+    "pactl list sinks | awk '/^\\s*Volume:/{ print $5; exit; }'", "r" // 5, 12
+  );
+  if (!p) {
+    ERR("popen");
+    goto fail;
+  }
+  char buf[8];
+  size_t n = fread(buf,1,sizeof(buf)-1,p);
+  for (char* c=buf+n; c-->buf; ) {
+    if (isspace(*c)) *c = '\0';
+  }
+  pclose(p);
+  printf("%ld\n",n);
+  if (n < 1) goto fail;
+  buf[n] = '\0';
+  snprintf(snd_text,sizeof(snd_text), "墳 %s",buf);
+  return;
+fail:
+  snprintf(snd_text,sizeof(snd_text), "墳 ???");
+}
+
+static void snd_event(void) {
+  snd_ctl_event_t* event;
+  /* unsigned int mask; */
+
+  snd_ctl_event_alloca(&event);
+  if (snd_ctl_read(snd_ctl,event) < 0) {
+    ERR("snd_ctl_read");
+    return;
+  }
+
+  pthread_mutex_lock(&setroot_mutex);
+  fmt_snd();
+  setroot();
+  pthread_mutex_unlock(&setroot_mutex);
+
+  /* if (snd_ctl_event_get_type(event) != SND_CTL_EVENT_ELEM) */
+  /*   return; */
+  /*  */
+  /* #<{(| char* name; |)}># */
+  /* #<{(| snd_card_get_longname(0,&name); |)}># */
+  /* #<{(| printf("%s\n",name); |)}># */
+  /*  */
+  /* printf("#%d (%i,%i,%i,%s,%i)", */
+  /*   snd_ctl_event_elem_get_numid(event), */
+  /*   snd_ctl_event_elem_get_interface(event), */
+  /*   snd_ctl_event_elem_get_device(event), */
+  /*   snd_ctl_event_elem_get_subdevice(event), */
+  /*   snd_ctl_event_elem_get_name(event), */
+  /*   snd_ctl_event_elem_get_index(event)); */
+  /*  */
+  /* mask = snd_ctl_event_elem_get_mask(event); */
+  /* if (mask == SND_CTL_EVENT_MASK_REMOVE) { */
+  /*   printf(" REMOVE\n"); */
+  /*   return; */
+  /* } */
+  /*  */
+  /* if (mask & SND_CTL_EVENT_MASK_VALUE) */
+  /*   printf(" VALUE"); */
+  /* if (mask & SND_CTL_EVENT_MASK_INFO) */
+  /*   printf(" INFO"); */
+  /* if (mask & SND_CTL_EVENT_MASK_ADD) */
+  /*   printf(" ADD"); */
+  /* if (mask & SND_CTL_EVENT_MASK_TLV) */
+  /*   printf(" TLV"); */
+  /* printf("\n"); */
+}
+
 static struct file_list_entry files[] = {
   { 0, "/sys/class/backlight/intel_backlight/brightness", fmt_brightness }
 };
@@ -290,10 +367,10 @@ void epoll_loop() {
       setroot();
       pthread_mutex_unlock(&setroot_mutex);
     } else while (n--) {
-      /* uint32_t flags = e.events; */
+      /* if (!(e.events & EPOLLIN)) continue; */
       const int fd = e.data.fd;
 
-      if (fd == timer_1min) {
+      if (fd == timer_1min) { // timer event
         long int timersElapsed = 0;
         (void)read(fd, &timersElapsed, sizeof(timersElapsed));
 
@@ -302,7 +379,7 @@ void epoll_loop() {
         setroot();
         pthread_mutex_unlock(&setroot_mutex);
 
-      } else if (fd == inot) {
+      } else if (fd == inot) { // file change event
         read(fd, inotify_buffer, sizeof(inotify_buffer));
         struct inotify_event* ie = (struct inotify_event*)inotify_buffer;
         const int wd = ie->wd;
@@ -315,6 +392,8 @@ void epoll_loop() {
             break;
           }
         }
+      } else if (fd == snd) { // sound event
+        snd_event();
       }
     } // while n
   } // ;;
@@ -327,6 +406,30 @@ static int epoll_add(int epoll, int fd) {
     .data = { .fd = fd }
   };
   return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
+}
+
+void alsa_epoll(void) {
+  struct pollfd pfd;
+  if (snd_ctl_open(&snd_ctl, "hw:0", SND_CTL_READONLY) < 0) {
+    ERR("snd_ctl_open");
+    return;
+  }
+  if (snd_ctl_subscribe_events(snd_ctl,1) < 0) {
+    ERR("snd_ctl_subscribe_events");
+    goto close;
+  }
+  if (snd_ctl_poll_descriptors(snd_ctl, &pfd, 1) < 1) {
+    ERR("snd_ctl_poll_descriptors");
+    goto close;
+  }
+  if (epoll_add(epoll,pfd.fd) == -1) {
+    ERR("epoll_add");
+    goto close;
+  }
+  snd = pfd.fd;
+  return;
+close:
+  snd_ctl_close(snd_ctl);
 }
 
 void cleanup(void) {
@@ -352,6 +455,7 @@ int main() {
   fmt_kbd_layout(get_kbd_layout());
   fmt_bat_status();
   fmt_bat_capacity();
+  fmt_snd();
   fmt_mem();
   fmt_cpu_load();
   fmt_cpu_temp();
@@ -384,6 +488,9 @@ int main() {
     ERR("epoll_add");
     return 1;
   }
+
+  // alsa -----------------------------------------------------------
+  alsa_epoll();
 
   // timer ----------------------------------------------------------
   if ((timer_1min = timerfd_create(CLOCK_REALTIME, 0)) == -1) {
