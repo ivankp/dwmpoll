@@ -81,6 +81,7 @@ char status_text[256],
   brightness_text[16],
   bat_status_text[16],
   bat_capacity_text[16],
+  updates_text[16],
   time_text[64];
 
 // TODO: volume, packages, internet
@@ -88,11 +89,12 @@ char status_text[256],
 
 void setroot(void) {
   sprintf(status_text,
-    " %s │ %s %s │ %s │ %s │ %s │ %s%s │ %s "
+    " %s │ %s %s │ %s │ %s │ %s │ %s │ %s%s │ %s "
     , kbd_layout_text
     , cpu_load_text
     , cpu_temp_text
     , mem_text
+    , updates_text
     , snd_text
     , brightness_text
     , bat_status_text
@@ -150,12 +152,8 @@ void fmt_mem(void) {
     "Buffers: %ju kB\n"
     "Cached: %ju kB\n",
     &total, &free, &buffers, &buffers, &cached) != 5
-  ) {
-    return;
-  }
-  if (total == 0) {
-    return;
-  }
+  ) return;
+  if (total == 0) return;
   snprintf(mem_text,sizeof(mem_text), "MEM%3ld%%",
     100*((total-free)-(buffers+cached))/total);
 }
@@ -179,6 +177,26 @@ void fmt_time(void) {
   }
 }
 
+static void fmt_updates(void) {
+  FILE* p = popen("checkupdates | wc -l", "r");
+  if (!p) {
+    ERR("popen");
+    goto fail;
+  }
+  char buf[8];
+  size_t n = fread(buf,1,sizeof(buf)-1,p);
+  pclose(p);
+  if (n < 1) goto fail;
+  for (char* c=buf+n; c-->buf; ) {
+    if (isspace(*c)) *c = '\0';
+  }
+  buf[n] = '\0';
+  snprintf(updates_text,sizeof(updates_text), "%3s",buf);
+  return;
+fail:
+  snprintf(updates_text,sizeof(updates_text), " ??");
+}
+
 struct file_list_entry;
 typedef void(*handler)(struct file_list_entry*);
 struct file_list_entry {
@@ -193,8 +211,12 @@ void fmt_bat_capacity(void) {
     bat_capacity_text,sizeof(bat_capacity_text)-1
   )) {
     const int val = atoi(bat_capacity_text);
+    static const int n = SIZE(bat_icons);
+    int i = val/n;
+    if (i < 0) i = 0;
+    else if (i >= n) i = n-1;
     snprintf(bat_capacity_text,sizeof(bat_capacity_text),
-      "%s%3d%%",bat_icons[val/10],val);
+      "%s%3d%%",bat_icons[i],val);
   } else {
     snprintf(bat_capacity_text,sizeof(bat_capacity_text), " ??%%");
   }
@@ -286,12 +308,11 @@ static void fmt_snd(void) {
   }
   char buf[8];
   size_t n = fread(buf,1,sizeof(buf)-1,p);
+  pclose(p);
+  if (n < 1) goto fail;
   for (char* c=buf+n; c-->buf; ) {
     if (isspace(*c)) *c = '\0';
   }
-  pclose(p);
-  printf("%ld\n",n);
-  if (n < 1) goto fail;
   buf[n] = '\0';
   snprintf(snd_text,sizeof(snd_text), "墳 %s",buf);
   return;
@@ -353,12 +374,17 @@ static struct file_list_entry files[] = {
 void epoll_loop() {
   struct epoll_event e;
   char inotify_buffer[sizeof(struct inotify_event)+64];
+  int num_cycles = 0;
   for (;;) {
     int n = epoll_wait(epoll, &e, 1, 2000/*ms*/);
     if (n < 0) {
-      ERR("epoll_wait");
+      if (errno != EINTR) ERR("epoll_wait");
     } else if (n==0) {
       pthread_mutex_lock(&setroot_mutex);
+      if (++num_cycles > 1800) {
+        fmt_updates();
+        num_cycles = 0;
+      }
       fmt_bat_status();
       fmt_bat_capacity();
       fmt_mem();
@@ -452,6 +478,7 @@ int main() {
   for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
     f->h(f);
   }
+  fmt_updates();
   fmt_kbd_layout(get_kbd_layout());
   fmt_bat_status();
   fmt_bat_capacity();
