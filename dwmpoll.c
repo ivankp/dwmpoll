@@ -84,10 +84,10 @@ char status_text[256],
   bat_status_text[16],
   bat_capacity_text[16],
   updates_text[16],
-  time_text[64];
+  time_text[32];
 
 void setroot(void) {
-  sprintf(status_text,
+  FMTSTR(status_text,
     " %s │ %s %s │ %s │ %s │ %s │ %s │ %s%s │ %s "
     , kbd_layout_text
     , cpu_load_text
