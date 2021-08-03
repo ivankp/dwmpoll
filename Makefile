@@ -5,12 +5,19 @@ THERMAL_ZONE_GREP = \
   | sed 's,/type$$,/temp,'
 THERMAL_ZONE = $(shell $(THERMAL_ZONE_GREP))
 
+.PHONY: all clean install
+
 all: $(MAIN)
 
 $(MAIN): %: %.c
-	gcc -Wall -Os -pthread -DTHERMAL_ZONE='$(THERMAL_ZONE)' $< -o $@ -lX11 -lxkbfile -lasound
+	$(CC) -Wall -Os -pthread -DTHERMAL_ZONE='$(THERMAL_ZONE)' $< -o $@ -lX11 -lxkbfile -lasound
 
 clean:
 	@rm -fv $(MAIN)
 
-.PHONY: all clean
+install: $(MAIN)
+	@cp -v $(MAIN) $(HOME)/.local/bin
+
+uninstall:
+	@rm -fv $(HOME)/.local/bin/$(MAIN)
+

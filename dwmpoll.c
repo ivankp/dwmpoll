@@ -84,9 +84,6 @@ char status_text[256],
   updates_text[16],
   time_text[64];
 
-// TODO: volume, packages, internet
-// TODO: acpi
-
 void setroot(void) {
   sprintf(status_text,
     " %s │ %s %s │ %s │ %s │ %s │ %s │ %s%s │ %s "
@@ -101,7 +98,6 @@ void setroot(void) {
     , bat_capacity_text
     , time_text
   );
-  /* printf("%s\n",status_text); */
   XStoreName(dpy,root,status_text);
   XFlush(dpy);
 }
@@ -140,7 +136,7 @@ void fmt_cpu_temp(void) {
     snprintf(cpu_temp_text,sizeof(cpu_temp_text), "%2.0f°C",val/1e3);
   } else
 #endif
-    snprintf(cpu_temp_text,sizeof(cpu_temp_text), "?°C");
+    snprintf(cpu_temp_text,sizeof(cpu_temp_text), "??°C");
 }
 
 void fmt_mem(void) {
