@@ -33,6 +33,8 @@ static void errptr(const char* fcn_name, int line) {
 }
 #define ERR(FCN_NAME) errptr(FCN_NAME,__LINE__)
 
+#define FMTSTR(S,...) snprintf(S,sizeof(S),__VA_ARGS__)
+
 static int read_file(const char* fname, char* buf, int n) {
   const int fd = open(fname, O_RDONLY);
   if (fd == -1) {
@@ -118,14 +120,14 @@ void fmt_cpu_load(void) {
 
   if (sum == 0) goto failed;
 
-  snprintf(cpu_load_text,sizeof(cpu_load_text), "CPU%3d%%",
+  FMTSTR(cpu_load_text, "CPU%3d%%",
     (int)(100 *
       ((b[0] + b[1] + b[2] + b[5] + b[6]) -
        (a[0] + a[1] + a[2] + a[5] + a[6])) / sum)
   );
   return;
 failed:
-  snprintf(cpu_load_text,sizeof(cpu_load_text), "CPU ???");
+  FMTSTR(cpu_load_text, "CPU ???");
 }
 
 void fmt_cpu_temp(void) {
@@ -133,10 +135,10 @@ void fmt_cpu_temp(void) {
   char buf[8];
   if (!read_file(STR(THERMAL_ZONE),buf,sizeof(buf)-1)) {
     const double val = atoi(buf);
-    snprintf(cpu_temp_text,sizeof(cpu_temp_text), "%2.0f°C",val/1e3);
+    FMTSTR(cpu_temp_text, "%2.0f°C",val/1e3);
   } else
 #endif
-    snprintf(cpu_temp_text,sizeof(cpu_temp_text), "??°C");
+    FMTSTR(cpu_temp_text, "??°C");
 }
 
 void fmt_mem(void) {
@@ -150,7 +152,7 @@ void fmt_mem(void) {
     &total, &free, &buffers, &buffers, &cached) != 5
   ) return;
   if (total == 0) return;
-  snprintf(mem_text,sizeof(mem_text), "MEM%3ld%%",
+  FMTSTR(mem_text, "MEM%3ld%%",
     100*((total-free)-(buffers+cached))/total);
 }
 
@@ -164,11 +166,11 @@ void fmt_time(void) {
   struct tm t;
   if (localtime_r(&tspec.tv_sec, &t) == NULL) {
     ERR("localtime_r");
-    snprintf(time_text,sizeof(time_text), STR(__LINE__)": localtime_r()");
+    FMTSTR(time_text, STR(__LINE__)": localtime_r()");
     return;
   }
   if (!strftime(time_text,sizeof(time_text), "%a %b %d %I:%M%P", &t)) {
-    snprintf(time_text,sizeof(time_text), STR(__LINE__) ": strftime()");
+    FMTSTR(time_text, STR(__LINE__) ": strftime()");
     return;
   }
 }
@@ -187,10 +189,10 @@ static void fmt_updates(void) {
     if (isspace(*c)) *c = '\0';
   }
   buf[n] = '\0';
-  snprintf(updates_text,sizeof(updates_text), "%3s",buf);
+  FMTSTR(updates_text, "%3s",buf);
   return;
 fail:
-  snprintf(updates_text,sizeof(updates_text), " ??");
+  FMTSTR(updates_text, " ??");
 }
 
 struct file_list_entry;
@@ -211,10 +213,10 @@ void fmt_bat_capacity(void) {
     int i = val/n;
     if (i < 0) i = 0;
     else if (i >= n) i = n-1;
-    snprintf(bat_capacity_text,sizeof(bat_capacity_text),
+    FMTSTR(bat_capacity_text,
       "%s%3d%%",bat_icons[i],val);
   } else {
-    snprintf(bat_capacity_text,sizeof(bat_capacity_text), " ??%%");
+    FMTSTR(bat_capacity_text, " ??%%");
   }
 }
 void fmt_bat_status(void) {
@@ -229,22 +231,22 @@ void fmt_bat_status(void) {
         bat_status_text[i] = '\0';
     }
     if (!strcmp(bat_status_text,"charging"))
-      snprintf(bat_status_text,sizeof(bat_status_text), "↑");
+      FMTSTR(bat_status_text, "↑");
     else if (!strcmp(bat_status_text,"discharging"))
-      snprintf(bat_status_text,sizeof(bat_status_text), "↓");
+      FMTSTR(bat_status_text, "↓");
     else
-      snprintf(bat_status_text,sizeof(bat_status_text), " ");
+      FMTSTR(bat_status_text, " ");
   } else {
-    snprintf(bat_status_text,sizeof(bat_status_text), "?");
+    FMTSTR(bat_status_text, "?");
   }
 }
 
 void fmt_brightness(struct file_list_entry* f) {
   if (!read_file(f->name, brightness_text,sizeof(brightness_text)-1)) {
     const int val = atoi(brightness_text);
-    snprintf(brightness_text,sizeof(brightness_text), "盛 %5d",val);
+    FMTSTR(brightness_text, "盛 %5d",val);
   } else {
-    snprintf(brightness_text,sizeof(brightness_text), "盛 ?????");
+    FMTSTR(brightness_text, "盛 ?????");
   }
 }
 
@@ -262,11 +264,11 @@ void fmt_kbd_layout(int group) {
   for (int i=0; i<group; ++i) {
     tok = strtok(NULL,",");
     if (!tok) {
-      snprintf(kbd_layout_text,sizeof(kbd_layout_text), "??");
+      FMTSTR(kbd_layout_text, "??");
       return;
     }
   }
-  snprintf(kbd_layout_text,sizeof(kbd_layout_text), tok);
+  FMTSTR(kbd_layout_text, tok);
   for (char* c=kbd_layout_text; *c; ++c)
     *c = toupper(*c);
 }
@@ -296,24 +298,30 @@ void* xevent_loop(void*) {
 
 static void fmt_snd(void) {
   FILE* p = popen(
-    "pactl list sinks | awk '/^\\s*Volume:/{ print $5; exit; }'", "r" // 5, 12
+    "pactl list sinks | awk '"
+      "/^\\s*Mute:/{printf \"%3s\",$2} "
+      "/^\\s*Volume:/{ printf \"%4s%4s\",$5,$12; exit; }'",
+    "r"
   );
   if (!p) {
     ERR("popen");
     goto fail;
   }
-  char buf[8];
+  char buf[12];
   size_t n = fread(buf,1,sizeof(buf)-1,p);
   pclose(p);
   if (n < 1) goto fail;
   for (char* c=buf+n; c-->buf; ) {
     if (isspace(*c)) *c = '\0';
+    else break;
   }
   buf[n] = '\0';
-  snprintf(snd_text,sizeof(snd_text), "墳 %s",buf);
+  FMTSTR(snd_text, "%s %.4s",
+    (strncmp("yes",buf,3) ? "墳" : "ﱝ"),
+    buf+3);
   return;
 fail:
-  snprintf(snd_text,sizeof(snd_text), "墳 ???");
+  FMTSTR(snd_text,"奄 ???");
 }
 
 static void snd_event(void) {
