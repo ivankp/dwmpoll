@@ -9,7 +9,6 @@
 
 #include <unistd.h>
 #include <fcntl.h>
-#include <pthread.h>
 
 #include <sys/types.h>
 #include <sys/epoll.h>
@@ -65,14 +64,13 @@ int pscanf(const char *path, const char *fmt, ...) {
   return (n == EOF) ? -1 : n;
 }
 
-static Display *dpy;
-static int screen;
-static Window root;
+Display *dpy;
+int screen;
+Window root;
+int xkbEventType;
 
-int epoll, timer_1min, inot, snd;
+int epoll, timer_1min, inot, snd, xsocket;
 snd_ctl_t* snd_ctl;
-
-pthread_mutex_t setroot_mutex;
 
 char status_text[256],
   kbd_layout_text[16],
@@ -273,29 +271,6 @@ void fmt_kbd_layout(int group) {
     *c = toupper(*c);
 }
 
-void* xevent_loop(void*) {
-  int xkbEventType;
-  XkbQueryExtension(dpy, 0, &xkbEventType, 0, 0, 0);
-  XkbSelectEventDetails(dpy,
-    XkbUseCoreKbd, XkbStateNotify, XkbAllStateComponentsMask,
-    XkbGroupStateMask);
-  XSync(dpy, False);
-
-  for (XEvent e;;) {
-    XNextEvent(dpy, &e);
-    if (e.type == xkbEventType) {
-      XkbEvent* xkbe = (XkbEvent*) &e;
-      if (xkbe->any.xkb_type == XkbStateNotify) {
-        pthread_mutex_lock(&setroot_mutex);
-        fmt_kbd_layout(xkbe->state.group);
-        setroot();
-        pthread_mutex_unlock(&setroot_mutex);
-      }
-    }
-  }
-  return NULL;
-}
-
 static void fmt_snd(void) {
   FILE* p = popen(
     "pactl list sinks | awk '"
@@ -324,53 +299,6 @@ fail:
   FMTSTR(snd_text,"奄 ???");
 }
 
-static void snd_event(void) {
-  snd_ctl_event_t* event;
-  /* unsigned int mask; */
-
-  snd_ctl_event_alloca(&event);
-  if (snd_ctl_read(snd_ctl,event) < 0) {
-    ERR("snd_ctl_read");
-    return;
-  }
-
-  pthread_mutex_lock(&setroot_mutex);
-  fmt_snd();
-  setroot();
-  pthread_mutex_unlock(&setroot_mutex);
-
-  /* if (snd_ctl_event_get_type(event) != SND_CTL_EVENT_ELEM) */
-  /*   return; */
-  /*  */
-  /* #<{(| char* name; |)}># */
-  /* #<{(| snd_card_get_longname(0,&name); |)}># */
-  /* #<{(| printf("%s\n",name); |)}># */
-  /*  */
-  /* printf("#%d (%i,%i,%i,%s,%i)", */
-  /*   snd_ctl_event_elem_get_numid(event), */
-  /*   snd_ctl_event_elem_get_interface(event), */
-  /*   snd_ctl_event_elem_get_device(event), */
-  /*   snd_ctl_event_elem_get_subdevice(event), */
-  /*   snd_ctl_event_elem_get_name(event), */
-  /*   snd_ctl_event_elem_get_index(event)); */
-  /*  */
-  /* mask = snd_ctl_event_elem_get_mask(event); */
-  /* if (mask == SND_CTL_EVENT_MASK_REMOVE) { */
-  /*   printf(" REMOVE\n"); */
-  /*   return; */
-  /* } */
-  /*  */
-  /* if (mask & SND_CTL_EVENT_MASK_VALUE) */
-  /*   printf(" VALUE"); */
-  /* if (mask & SND_CTL_EVENT_MASK_INFO) */
-  /*   printf(" INFO"); */
-  /* if (mask & SND_CTL_EVENT_MASK_ADD) */
-  /*   printf(" ADD"); */
-  /* if (mask & SND_CTL_EVENT_MASK_TLV) */
-  /*   printf(" TLV"); */
-  /* printf("\n"); */
-}
-
 static struct file_list_entry files[] = {
   { 0, "/sys/class/backlight/intel_backlight/brightness", fmt_brightness }
 };
@@ -384,7 +312,6 @@ void epoll_loop() {
     if (n < 0) {
       if (errno != EINTR) ERR("epoll_wait");
     } else if (n==0) {
-      pthread_mutex_lock(&setroot_mutex);
       if (++num_cycles > 1800) {
         fmt_updates();
         num_cycles = 0;
@@ -395,35 +322,47 @@ void epoll_loop() {
       fmt_cpu_load();
       fmt_cpu_temp();
       setroot();
-      pthread_mutex_unlock(&setroot_mutex);
     } else while (n--) {
-      /* if (!(e.events & EPOLLIN)) continue; */
+      // if (!(e.events & EPOLLIN)) continue;
       const int fd = e.data.fd;
 
       if (fd == timer_1min) { // timer event
         long int timersElapsed = 0;
         (void)read(fd, &timersElapsed, sizeof(timersElapsed));
 
-        pthread_mutex_lock(&setroot_mutex);
         fmt_time();
         setroot();
-        pthread_mutex_unlock(&setroot_mutex);
 
       } else if (fd == inot) { // file change event
-        read(fd, inotify_buffer, sizeof(inotify_buffer));
+        (void)read(fd, inotify_buffer, sizeof(inotify_buffer));
         struct inotify_event* ie = (struct inotify_event*)inotify_buffer;
         const int wd = ie->wd;
         for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
           if (f->wd == wd) {
-            pthread_mutex_lock(&setroot_mutex);
             f->h(f);
             setroot();
-            pthread_mutex_unlock(&setroot_mutex);
             break;
           }
         }
+      } else if (fd == xsocket) { // X event
+        XEvent e;
+        XNextEvent(dpy, &e);
+        if (e.type == xkbEventType) {
+          XkbEvent* xkbe = (XkbEvent*) &e;
+          if (xkbe->any.xkb_type == XkbStateNotify) {
+            fmt_kbd_layout(xkbe->state.group);
+            setroot();
+          }
+        }
       } else if (fd == snd) { // sound event
-        snd_event();
+        snd_ctl_event_t* event;
+        snd_ctl_event_alloca(&event);
+        if (snd_ctl_read(snd_ctl,event) < 0) {
+          ERR("snd_ctl_read");
+          continue;
+        }
+        fmt_snd();
+        setroot();
       }
     } // while n
   } // ;;
@@ -432,7 +371,6 @@ void epoll_loop() {
 static int epoll_add(int epoll, int fd) {
   struct epoll_event event = {
     .events = EPOLLIN,
-    /* .events = EPOLLIN | EPOLLET, */
     .data = { .fd = fd }
   };
   return epoll_ctl(epoll,EPOLL_CTL_ADD,fd,&event);
@@ -520,6 +458,19 @@ int main() {
     return 1;
   }
 
+  // X --------------------------------------------------------------
+  XkbQueryExtension(dpy, 0, &xkbEventType, 0, 0, 0);
+  XkbSelectEventDetails(dpy,
+    XkbUseCoreKbd, XkbStateNotify, XkbAllStateComponentsMask,
+    XkbGroupStateMask);
+  XSync(dpy, False);
+
+  xsocket = ConnectionNumber(dpy);
+  if (epoll_add(epoll,xsocket) == -1) {
+    ERR("epoll_add");
+    return 1;
+  }
+
   // alsa -----------------------------------------------------------
   alsa_epoll();
 
@@ -545,10 +496,6 @@ int main() {
     ERR("epoll_add");
     return 1;
   }
-
-  // loops ----------------------------------------------------------
-  pthread_t xevent_thread;
-  pthread_create(&xevent_thread, NULL, xevent_loop, NULL);
 
   epoll_loop(epoll);
 }
