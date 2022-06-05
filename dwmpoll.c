@@ -273,13 +273,13 @@ void fmt_kbd_layout(int group) {
 
 static void fmt_snd(void) {
   FILE* p = popen(
-    // "pactl list sinks | awk '"
-    //   "/^\\s*Mute:/{printf \"%3s\",$2} "
-    //   "/^\\s*Volume:/{ printf \"%4s%4s\",$5,$12; exit; }'",
     "pactl list sinks | awk '"
-      "/^\\s*Name:/{ name = $2==\"'\"`pactl get-default-sink`\"'\" } "
-      "/^\\s*Mute:/{ if (name) mute=$2 } "
-      "/^\\s*Volume:/{ if (name) { v1=$5; v2=$12; } } "
+      "/^\\s*Name:/{"
+        "if (name) exit;"
+        "name = $2==\"'\"`pactl get-default-sink`\"'\""
+      "}"
+      "/^\\s*Mute:/{ if (name) mute=$2 }"
+      "/^\\s*Volume:/{ if (name) { v1=$5; v2=$12; } }"
       "END { if (name) printf \"%3s%4s%4s\", mute, v1, v2 }'",
     "r"
   );
