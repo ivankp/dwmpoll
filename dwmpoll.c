@@ -27,10 +27,10 @@
 
 #define SIZE(x) sizeof(x)/sizeof(x[0])
 
-static void errptr(const char* fcn_name, int line) {
+static void perr(const char* fcn_name, int line) {
   fprintf(stderr,"%d: %s(): %s\n",line,fcn_name,strerror(errno));
 }
-#define ERR(FCN_NAME) errptr(FCN_NAME,__LINE__)
+#define ERR(FCN_NAME) perr(FCN_NAME,__LINE__)
 
 #define FMTSTR(S,...) snprintf(S,sizeof(S),__VA_ARGS__)
 
@@ -273,9 +273,14 @@ void fmt_kbd_layout(int group) {
 
 static void fmt_snd(void) {
   FILE* p = popen(
+    // "pactl list sinks | awk '"
+    //   "/^\\s*Mute:/{printf \"%3s\",$2} "
+    //   "/^\\s*Volume:/{ printf \"%4s%4s\",$5,$12; exit; }'",
     "pactl list sinks | awk '"
-      "/^\\s*Mute:/{printf \"%3s\",$2} "
-      "/^\\s*Volume:/{ printf \"%4s%4s\",$5,$12; exit; }'",
+      "/^\\s*Name:/{ name = $2==\"'\"`pactl get-default-sink`\"'\" } "
+      "/^\\s*Mute:/{ if (name) mute=$2 } "
+      "/^\\s*Volume:/{ if (name) { v1=$5; v2=$12; } } "
+      "END { if (name) printf \"%3s%4s%4s\", mute, v1, v2 }'",
     "r"
   );
   if (!p) {
@@ -420,7 +425,8 @@ int main() {
   for (struct file_list_entry* f = files+SIZE(files); f-- > files; ) {
     f->h(f);
   }
-  fmt_updates();
+  // fmt_updates();
+  FMTSTR(updates_text, "  0");
   fmt_kbd_layout(get_kbd_layout());
   fmt_bat_status();
   fmt_bat_capacity();
