@@ -503,5 +503,5 @@ int main() {
     return 1;
   }
 
-  epoll_loop(epoll);
+  epoll_loop();
 }
