@@ -174,7 +174,7 @@ void fmt_time(void) {
 }
 
 static void fmt_updates(void) {
-  FILE* p = popen("checkupdates | wc -l", "r");
+  FILE* p = popen("checkupdates --nocolor | wc -l", "r");
   if (!p) {
     ERR("popen");
     goto fail;
@@ -187,10 +187,10 @@ static void fmt_updates(void) {
     if (isspace(*c)) *c = '\0';
   }
   buf[n] = '\0';
-  FMTSTR(updates_text, "%3s",buf);
+  FMTSTR(updates_text, "%3s",buf);
   return;
 fail:
-  FMTSTR(updates_text, " ??");
+  FMTSTR(updates_text, " ??");
 }
 
 struct file_list_entry;
@@ -201,7 +201,7 @@ struct file_list_entry {
   handler h;
 };
 
-const char* const bat_icons[] = { "","","","","","","","","","" };
+const char* const bat_icons[] = { "󰁺","󰁻","󰁼","󰁽","󰁾","󰁿","󰂀","󰂁","󰂂","󰁹" };
 void fmt_bat_capacity(void) {
   if (!read_file("/sys/class/power_supply/BAT0/capacity",
     bat_capacity_text,sizeof(bat_capacity_text)-1
@@ -214,7 +214,7 @@ void fmt_bat_capacity(void) {
     FMTSTR(bat_capacity_text,
       "%s%3d%%",bat_icons[i],val);
   } else {
-    FMTSTR(bat_capacity_text, " ??%%");
+    FMTSTR(bat_capacity_text, "󰂑 ??%%");
   }
 }
 void fmt_bat_status(void) {
@@ -242,9 +242,9 @@ void fmt_bat_status(void) {
 void fmt_brightness(struct file_list_entry* f) {
   if (!read_file(f->name, brightness_text,sizeof(brightness_text)-1)) {
     const int val = atoi(brightness_text);
-    FMTSTR(brightness_text, "盛 %5d",val);
+    FMTSTR(brightness_text, "󰖨 %5d",val);
   } else {
-    FMTSTR(brightness_text, "盛 ?????");
+    FMTSTR(brightness_text, "󰖨 ?????");
   }
 }
 
@@ -297,11 +297,11 @@ static void fmt_snd(void) {
   }
   buf[n] = '\0';
   FMTSTR(snd_text, "%s %.4s",
-    (strncmp("yes",buf,3) ? "墳" : "ﱝ"),
+    (strncmp("yes",buf,3) ? "󰕾" : "󰝟"),
     buf+3);
   return;
 fail:
-  FMTSTR(snd_text,"奄 ???");
+  FMTSTR(snd_text,"󰕿 ???");
 }
 
 static struct file_list_entry files[] = {
@@ -426,7 +426,7 @@ int main() {
     f->h(f);
   }
   // fmt_updates();
-  FMTSTR(updates_text, "  0");
+  FMTSTR(updates_text, "  0");
   fmt_kbd_layout(get_kbd_layout());
   fmt_bat_status();
   fmt_bat_capacity();
